@@ -46,12 +46,14 @@ async function openVideo(video){
   const iframe=document.createElement('iframe');const src=new URL('https://player.vimeo.com/video/'+r.id);if(r.hash)src.searchParams.set('h',r.hash);src.searchParams.set('dnt','1');iframe.src=src.href;iframe.title=r.title;iframe.allow='autoplay; fullscreen; picture-in-picture';iframe.allowFullscreen=true;$('player').replaceChildren(iframe);$('watch').hidden=false;$('title').textContent=r.title;
   const instance=new Vimeo.Player(iframe);player=instance;await instance.ready();if(request!==sequence||player!==instance)return;
   current=r;if(!records.includes(r))records.push(r);
-  const saved=r.seconds;let restoreError=false;if(saved>0){try{const duration=await instance.getDuration();await instance.setCurrentTime(Math.min(saved,Math.max(0,duration-1)));}catch{restoreError=true;}}
-  try{r.title=await instance.getVideoTitle();}catch{}if(request!==sequence||player!==instance)return;
+  const saved=r.seconds;let pendingResume=saved>0,loadVersion=0,restoring=false;
+  const save=(seconds,force=false)=>{if(current!==r||player!==instance||pendingResume)return;r.seconds=seconds;r.updated=Date.now();$('position').textContent='Uložená pozice: '+time(seconds);if(force||Date.now()-lastWrite>1000){lastWrite=Date.now();persist();render();}};
+  const deadline=promise=>new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Vimeo neodpovídá.')),6000);promise.then(value=>{clearTimeout(timer);resolve(value);},error=>{clearTimeout(timer);reject(error);});});
+  const connect=()=>{if(player!==instance||current!==r)return;['timeupdate','pause','ended','play','error'].forEach(name=>instance.off(name));instance.on('timeupdate',async e=>{if(pendingResume){if(restoring||e.seconds<=0)return;restoring=true;const version=loadVersion;try{await deadline(instance.setCurrentTime(r.seconds));if(version===loadVersion){pendingResume=false;status('Pozice obnovena. Přehrávání běží.');}}catch{if(version===loadVersion){pendingResume=false;status('Pozici nelze obnovit. Přehrávání pokračuje.');}}finally{restoring=false;}return;}save(e.seconds);});instance.on('pause',e=>save(e.seconds,true));instance.on('ended',()=>save(0,true));instance.on('play',()=>status(pendingResume?'Obnovuji uloženou pozici…':'Přehrávání běží. Pozice se ukládá automaticky.'));instance.on('error',()=>status('Vimeo znovu načítá přehrávač, nebo video nelze přehrát. Zkuste spustit video znovu.'));}; connect(); iframe.addEventListener('load',async()=>{if(player!==instance||current!==r)return;loadVersion++;connect();pendingResume=r.seconds>0;status('Přehrávač znovu načten. Klepněte na přehrávání.');});
+  
+  try{r.title=await deadline(instance.getVideoTitle());}catch{}if(request!==sequence||player!==instance)return;
   $('title').textContent=r.title;iframe.title=r.title;r.updated=Date.now();persist();render();$('position').textContent='Uložená pozice: '+time(r.seconds);
-  const save=(seconds,force=false)=>{if(current!==r||player!==instance)return;r.seconds=seconds;r.updated=Date.now();$('position').textContent='Uložená pozice: '+time(seconds);if(force||Date.now()-lastWrite>1000){lastWrite=Date.now();persist();render();}};
-  instance.on('timeupdate',e=>save(e.seconds));instance.on('pause',e=>save(e.seconds,true));instance.on('ended',()=>save(0,true));instance.on('error',()=>status('Video nelze přehrát. Ověřte odkaz a povolení vložení videa.'));
-  status(restoreError?'Uloženou pozici se nepodařilo obnovit. Video můžete spustit ručně.':saved>0?'Pozice obnovena. Klepněte na přehrávání.':'Video připraveno. Klepněte na přehrávání.');
+  status(saved>0?'Pozice se obnoví při spuštění. Klepněte na přehrávání.':'Video připraveno. Klepněte na přehrávání.');
  }catch(e){if(request===sequence)status(e.message||'Video se nepodařilo načíst.');}finally{if(request===sequence)$('open').disabled=false;}
 }
 $('form').addEventListener('submit',e=>{e.preventDefault();try{openVideo(parseVideo($('url').value));}catch(err){status(err.message);}});
